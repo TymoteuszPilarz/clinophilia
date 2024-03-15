@@ -1,0 +1,2 @@
+pymonctl==0.7
+pywinctl==0.3
