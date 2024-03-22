@@ -1,0 +1,57 @@
+{
+    "teams": {
+        "path": "/Applications/Microsoft Teams (work or school).app",
+        "excluded_names": [
+            "Activity",
+            "Chat",
+            "Teams and Channels",
+            "Assignments",
+            "Calendar",
+            "Calls",
+            "Onedrive",
+            "Apps",
+            "OneDrive",
+            "Word",
+            "Help",
+            "Reflect",
+            "Excel",
+            "Whiteboard",
+            "Stream",
+            "Edu Staff Notebook",
+            "Edu Class Notebook",
+            "OneNote",
+            "Shifts",
+            "Tasks by Planner and To Do",
+            "Viva Insights",
+            "Meet",
+            "People",
+            "Visio",
+            "PowerPoint",
+            "Approvals",
+            "Viva learning",
+            "Updates",
+            "Avatars",
+            "YouTube",
+            "Power BI",
+            "M365 Chat",
+            "Workflows",
+            "Power Apps",
+            "Polly",
+            "Jira Clound",
+            "Viva Engage",
+            "Bookings"
+        ]
+    },
+    "obs": {
+        "path": "/Applications/OBS.app",
+        "host": "localhost",
+        "port": 4455,
+        "password": "AHbgP4YZbTEYpiFf"
+    },
+    "settings": {
+        "min_time": "00:15:00",
+        "min_participants": 5,
+        "min_participants_ratio": 0.1,
+        "warning_sound_path": "circus_theme.mp3"
+    }
+}
