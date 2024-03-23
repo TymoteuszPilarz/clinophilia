@@ -27,7 +27,7 @@ class OBSController:
             try:
                 self.obs_client.get_stats()
                 break
-            except:
+            except obs.error.OBSSDKRequestError:
                 pass
                 
         self.scene_name = 'clinophilia_scene'
@@ -35,7 +35,6 @@ class OBSController:
         try:
             self.obs_client.create_scene(self.scene_name)
         except obs.error.OBSSDKRequestError:
-            print('here')
             self.obs_client.remove_scene(self.scene_name)
             self.obs_client.create_scene(self.scene_name)
         self.obs_client.set_current_program_scene(self.scene_name)
