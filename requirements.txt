@@ -4,4 +4,6 @@ PyAutoGUI==0.9.54
 pydantic==2.6.4
 PyMonCtl==0.7
 pytesseract==0.3.10
+obsws_python==1.7.0
+pygame==2.5.2
 PyWinCtl==0.3
