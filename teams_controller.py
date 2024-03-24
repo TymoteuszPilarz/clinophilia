@@ -4,14 +4,18 @@ import pyautogui
 import re
 import pytesseract as tes
 import numpy as np
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import Optional
 import cv2
 from models import ElementArea, MatchedElementArea, MatchedTextElementArea
+import os
+from os import path as p
+from shutil import rmtree
 from constants import (
     TEAMS_LEAVE_BUTTON_ABS_PATH,
     TEAMS_PEOPLE_ICON_ABS_PATH,
     TEAMS_SHIELD_ICON_ABS_PATH,
+    TEAMS_DEBUG_IMAGES_DIR_ABS_PATH,
 )
 
 
@@ -23,15 +27,18 @@ class WindowNotReadyException(Exception):
   pass
 
 
+class ParticipantsNumberNotVisibleException(Exception):
+  pass
+
+
 class TeamsController:
 
-  def __init__(self,
-               screenshot_override: Optional[cv2.typing.MatLike] = None
-               ) -> None:
-    self._screenshot_override: Optional[
-        cv2.typing.MatLike] = screenshot_override
+  def __init__(
+      self, screenshot_overrides: tuple[cv2.typing.MatLike] = ()) -> None:
+    self._screenshot_overrides: tuple[
+        cv2.typing.MatLike] = screenshot_overrides
+    self._screenshot_overrides_index = 0
     self._screenshot: cv2.typing.MatLike
-    self._take_screenshot()
     self._leave_button_templ = cv2.imread(TEAMS_LEAVE_BUTTON_ABS_PATH)
     self._shield_icon_templ = cv2.imread(TEAMS_SHIELD_ICON_ABS_PATH)
     self._people_icon_templ = cv2.imread(TEAMS_PEOPLE_ICON_ABS_PATH)
@@ -84,7 +91,13 @@ class TeamsController:
     self._participants_number = ''.join(
         c for c in self._participants_number_text.text if c.isdigit())
 
-  def show_debug_image(self):
+  def clear_debug_images(self):
+    rmtree(TEAMS_DEBUG_IMAGES_DIR_ABS_PATH, ignore_errors=True)
+
+  def show_debug_image(self, headless: bool = False):
+    if self._screenshot is None:
+      print('No screenshot to show')
+      return
     debug_image = self._screenshot.copy()
 
     def draw_rect(match: Optional[ElementArea],
@@ -111,8 +124,17 @@ class TeamsController:
     draw_rect(self._meeting_duration_text_offset, cyan)
     draw_rect(self._participants_number_text_offset, cyan)
 
-    cv2.imshow('Debug', debug_image)
-    cv2.waitKey(0)
+    if not hasattr(cv2, 'imshow') or not hasattr(cv2, 'waitKey'):
+      print('cv2.imshow and cv2.waitKey not available, saving image instead')
+      headless = True
+    if not headless:
+      cv2.imshow('Debug', debug_image)
+      cv2.waitKey(0)
+    else:
+      timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+      file = f'{timestamp}.jpg'
+      os.makedirs(TEAMS_DEBUG_IMAGES_DIR_ABS_PATH, exist_ok=True)
+      cv2.imwrite(p.join(TEAMS_DEBUG_IMAGES_DIR_ABS_PATH, file), debug_image)
 
   def _ensure_meeting_window_ready(self):
     if not self._window or not 'Microsoft Teams' in self._window.getAppName():
@@ -124,9 +146,10 @@ class TeamsController:
     # self._window.maximize()
 
   def _extract_elements(self, refresh_offsets: bool = False):
-    if self._screenshot_override is None:
+    if not len(self._screenshot_overrides):
       self._ensure_meeting_window_ready()
-      self._take_screenshot()
+
+    self._take_screenshot()
 
     if refresh_offsets:
       self._leave_button_offset = None
@@ -146,24 +169,27 @@ class TeamsController:
     if not self._leave_button_offset:
       self._leave_button_offset = self._leave_button.multiplied_by(1.5)
 
-    matches = self._find_elements_areas(
-        self._shield_icon_templ,
-        area=self._shield_icon_offset,
-    )
-    if not len(matches):
-      raise ElementNotFoundException('Shield icon not found')
-    self._shield_icon = min(matches, key=lambda match: match.y)
-    if not self._shield_icon_offset:
-      self._shield_icon_offset = self._shield_icon.multiplied_by(1.5)
+    # offset is known, so it's unnecessary
+    if not self._meeting_duration_text_offset:
+      matches = self._find_elements_areas(
+          self._shield_icon_templ,
+          area=self._shield_icon_offset,
+      )
+      if not len(matches):
+        raise ElementNotFoundException('Shield icon not found')
+      self._shield_icon = min(matches, key=lambda match: match.y)
+      if not self._shield_icon_offset:
+        self._shield_icon_offset = self._shield_icon.multiplied_by(1.5)
 
-    matches = self._find_elements_areas(self._people_icon_templ,
-                                        area=self._people_icon_offset,
-                                        threshold=0.7)
-    if not len(matches):
-      raise ElementNotFoundException('People icon not found')
-    self._people_icon = min(matches, key=lambda match: match.y)
-    if not self._people_icon_offset:
-      self._people_icon_offset = self._people_icon.multiplied_by(1.5)
+    if not self._participants_number_text_offset:
+      matches = self._find_elements_areas(self._people_icon_templ,
+                                          area=self._people_icon_offset,
+                                          threshold=0.7)
+      if not len(matches):
+        raise ElementNotFoundException('People icon not found')
+      self._people_icon = min(matches, key=lambda match: match.y)
+      if not self._people_icon_offset:
+        self._people_icon_offset = self._people_icon.multiplied_by(1.5)
 
     # text elements
     if not self._meeting_duration_text_offset:
@@ -188,36 +214,51 @@ class TeamsController:
       raise ElementNotFoundException('Meeting duration has invalid format')
     self._meeting_duration_text = regex_match
 
-    if not self._participants_number_text_offset:
-      self._participants_number_text_offset = ElementArea(
-          x=self._people_icon.x + self._people_icon.w +
-          3 * self._people_icon.scale,
-          y=self._people_icon.y,
-          w=50 * self._people_icon.scale,
-          h=self._people_icon.h * self._people_icon.scale,
+    if is_there_red(self._screenshot[
+        self._people_icon_offset.y:self._people_icon_offset.y +
+        self._people_icon_offset.h,
+        self._people_icon_offset.x:self._people_icon_offset.x +
+        self._people_icon_offset.w]):
+      raise ParticipantsNumberNotVisibleException(
+          'Hand is raised by a participant')
+    else:
+      if not self._participants_number_text_offset:
+        self._participants_number_text_offset = ElementArea(
+            x=self._people_icon.x + self._people_icon.w +
+            3 * self._people_icon.scale,
+            y=self._people_icon.y,
+            w=50 * self._people_icon.scale,
+            h=self._people_icon.h * self._people_icon.scale,
+        )
+      matches = self._find_text(
+          area=self._participants_number_text_offset,
+          config=r'--oem 3 --psm 6 digits',
       )
-    matches = self._find_text(
-        area=self._participants_number_text_offset,
-        config=r'--oem 3 --psm 6 digits',
-    )
-    l = len(matches)
-    if not l:
-      raise ElementNotFoundException('Participants number text not found')
-    participants_regex = re.compile(r'.*\d{1,}')
-    regex_match = None
-    for i in range(l):
-      if participants_regex.match(matches[i].text):
-        regex_match = matches[i]
-        break
-    if not regex_match:
-      regex_match = matches[0]
-      regex_match.text = '0'
-      # raise ElementNotFoundException('Participants number has invalid format')
-    self._participants_number_text = regex_match
+      l = len(matches)
+      if not l:
+        raise ElementNotFoundException('Participants number text not found')
+      participants_regex = re.compile(r'.*\d{1,}')
+      regex_match = None
+      for i in range(l):
+        if participants_regex.match(matches[i].text):
+          regex_match = matches[i]
+          break
+      if not regex_match:
+        regex_match = matches[0]
+        if not regex_match.text.strip():
+          regex_match.text = '1'  # no number means 1 participant
+        else:
+          raise ElementNotFoundException(
+              'Participants number has invalid format')
+      self._participants_number_text = regex_match
 
   def _take_screenshot(self):
-    if self._screenshot_override is not None:
-      screenshot = self._screenshot_override
+    if len(self._screenshot_overrides):
+      if self._screenshot_overrides_index >= len(self._screenshot_overrides):
+        self._screenshot_overrides_index = 0
+        print('All screenshot overrides used, starting over')
+      screenshot = self._screenshot_overrides[self._screenshot_overrides_index]
+      self._screenshot_overrides_index += 1
     else:
       screenshot = pyautogui.screenshot()  # RGB PIL image
       screenshot = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
@@ -290,23 +331,48 @@ class TeamsController:
     return matches
 
 
+def is_there_red(img: cv2.typing.MatLike) -> bool:
+  hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+  red_mask_left = cv2.inRange(hsv, (0, 100, 100), (10, 255, 255))
+  red_mask_right = cv2.inRange(hsv, (160, 100, 100), (179, 255, 255))
+
+  red_mask = cv2.bitwise_or(red_mask_left, red_mask_right)
+  # red = cv2.bitwise_and(img, img, mask=red_mask)
+  # cv2.imshow('red', red)
+  # cv2.waitKey(0)
+  if np.sum(red_mask) > 0:
+    return True
+  return False
+
+
 if __name__ == '__main__':
   import time
-  ctrl = TeamsController()
-  # ctrl = TeamsController(screenshot_override=cv2.imread('teams_screen.png'))
+  import os
+  from constants import TEST_IMAGES_DIR_ABS_PATH
+  overrides = []
+  for file in os.listdir(TEST_IMAGES_DIR_ABS_PATH):
+    if file.endswith('.png'):
+      overrides.append(cv2.imread(p.join(TEST_IMAGES_DIR_ABS_PATH, file)))
+  ctrl = TeamsController(screenshot_overrides=overrides)
+  # ctrl = TeamsController()
+  ctrl.clear_debug_images()
+
   i = 0
   while True:
     try:
-      i += 1
-      print(f'i: {i}')
       time.sleep(2)
+      print(f'i: {i}')
       ctrl.extract_data()
       print(f'Meeting duration: {ctrl.meeting_duration}')
       print(f'Participants number: {ctrl.participants_number}')
-      if i == 3:
-        ctrl.click_leave_button()
-        break
+      # if i == 5:
+      #   ctrl.click_leave_button()
+      #   break
     except (ElementNotFoundException, WindowNotReadyException) as e:
       print(e)
-      ctrl.show_debug_image()
-      exit()
+      exit(1)
+    except ParticipantsNumberNotVisibleException as e:
+      print(e)
+    finally:
+      ctrl.show_debug_image(headless=True)
+      i += 1
