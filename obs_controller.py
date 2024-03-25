@@ -18,41 +18,47 @@ class OBSController:
         # Wait until the obs client is connected to the server
         while True:
             try:
-                self.obs_client = obs.ReqClient(
+                self._obs_client = obs.ReqClient(
                     host=self._host, port=self._port, password=self._password, timeout=5
                 )
                 break
-            except ConnectionRefusedError:
+            except ConnectionRefusedError as e:
                 pass
 
         # Wait until the obs server is ready to receive requests
         while True:
             try:
-                self.obs_client.get_stats()
+                self._obs_client.get_stats()
                 break
-            except obs.error.OBSSDKRequestError:
+            except obs.error.OBSSDKRequestError as e:
                 pass
 
         self.scene_name = "clinophilia_scene"
 
         try:
-            self.obs_client.create_scene(self.scene_name)
-        except obs.error.OBSSDKRequestError:
-            self.obs_client.remove_scene(self.scene_name)
-            self.obs_client.create_scene(self.scene_name)
-        self.obs_client.set_current_program_scene(self.scene_name)
+            self._obs_client.create_scene(self.scene_name)
+        except obs.error.OBSSDKRequestError as e:
+            self._obs_client.remove_scene(self.scene_name)
+            while True:
+                try:
+                    self._obs_client.create_scene(self.scene_name)
+                    break
+                except obs.error.OBSSDKRequestError as e:
+                    pass
 
-        self.obs_client.create_input(
+        self._obs_client.set_current_program_scene(self.scene_name)
+
+        self._obs_client.create_input(
             self.scene_name,
             self.scene_name + "_dummy_source",
             "screen_capture",
             {},
             False,
         )
-        windows = self.obs_client.get_input_properties_list_property_items(
+        windows = self._obs_client.get_input_properties_list_property_items(
             self.scene_name + "_dummy_source", "window"
         )
-        self.obs_client.remove_input(self.scene_name + "_dummy_source")
+        self._obs_client.remove_input(self.scene_name + "_dummy_source")
 
         teams_window_id = None
         for window in windows.property_items:
@@ -60,21 +66,21 @@ class OBSController:
                 teams_window_id = window["itemValue"]
                 break
 
-        self.obs_client.create_input(
+        self._obs_client.create_input(
             self.scene_name,
             self.scene_name + "_source",
             "screen_capture",
             {
                 "application": "com.microsoft.teams2",
-                "show_hidden_windows": True,
+                "show_cursor": False,
                 "type": 2,
                 "window": teams_window_id,
             },
             True,
         )
 
-        self.obs_client.start_record()
+        self._obs_client.start_record()
 
     def stop_recording(self):
-        self.obs_client.stop_record()
-        self.obs_client.remove_scene(self.scene_name)
+        self._obs_client.stop_record()
+        self._obs_client.remove_scene(self.scene_name)
