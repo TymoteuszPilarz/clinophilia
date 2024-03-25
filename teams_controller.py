@@ -1,5 +1,4 @@
 import pywinctl
-import pymonctl
 import pyautogui
 import re
 import pytesseract as tes
@@ -10,6 +9,7 @@ import cv2
 from models import ElementArea, MatchedElementArea, MatchedTextElementArea
 import os
 from os import path as p
+import json
 from shutil import rmtree
 from constants import (
     TEAMS_LEAVE_BUTTON_ABS_PATH,
@@ -36,7 +36,7 @@ class TeamsController:
     def __init__(self, screenshot_overrides: tuple[cv2.typing.MatLike] = ()) -> None:
         self._screenshot_overrides: tuple[cv2.typing.MatLike] = screenshot_overrides
         self._screenshot_overrides_index = 0
-        self._screenshot: cv2.typing.MatLike
+        self._screenshot: Optional[cv2.typing.MatLike] = None
         self._leave_button_templ = cv2.imread(TEAMS_LEAVE_BUTTON_ABS_PATH)
         self._shield_icon_templ = cv2.imread(TEAMS_SHIELD_ICON_ABS_PATH)
         self._people_icon_templ = cv2.imread(TEAMS_PEOPLE_ICON_ABS_PATH)
@@ -50,10 +50,22 @@ class TeamsController:
         self._people_icon: Optional[MatchedElementArea] = None
         self._meeting_duration_text: Optional[MatchedTextElementArea] = None
         self._participants_number_text: Optional[MatchedTextElementArea] = None
-        self._screen_size = pymonctl.getPrimary().size
-        self._window = pywinctl.getActiveWindow()
         self._meeting_duration: timedelta
         self._participants_number: int
+
+        with open("config.json", "r") as json_file:
+            config = json.load(json_file)
+        self._teams_excluded_names = config["teams"]["excluded_names"]
+
+        self._teams_windows = []
+
+        windows = pywinctl.getAllWindows()
+        for window in windows:
+            if self._is_meeting_window(window.title):
+                self._teams_windows.append(window)
+
+        if not self._teams_windows:
+            raise WindowNotReadyException("There are no meeting windows opened")
 
     @property
     def meeting_duration(self) -> timedelta:
@@ -67,8 +79,29 @@ class TeamsController:
             self.extract_data()
         return self._participants_number
 
+    @property
+    def offsets_loaded(self) -> bool:
+        return (
+            not self._leave_button_offset
+            and not self._shield_icon_offset
+            and not self._people_icon_offset
+            and not self._meeting_duration_text_offset
+            and not self._participants_number_text_offset
+        )
+
     def click_leave_button(self, duration: float = 0.5):
-        self._extract_elements()
+        if not len(self._screenshot_overrides):
+            self.ensure_meeting_window_is_ready()
+
+        self._take_screenshot()
+
+        matches = self._find_elements_areas(
+            self._leave_button_templ,
+            area=self._leave_button_offset,
+        )
+        if not len(matches):
+            raise ElementNotFoundException("Leave button not found")
+
         ratio = pyautogui.size().width / self._screenshot.shape[1]
         pyautogui.click(
             self._leave_button.x * ratio,
@@ -87,9 +120,16 @@ class TeamsController:
             meeting_duration = timedelta(hours=hours, minutes=mins, seconds=secs)
         self._meeting_duration = meeting_duration
 
-        self._participants_number = "".join(
-            c for c in self._participants_number_text.text if c.isdigit()
+        self._participants_number = int(
+            "".join(c for c in self._participants_number_text.text if c.isdigit())
         )
+
+    def clear_offsets(self):
+        self._leave_button_offset = None
+        self._shield_icon_offset = None
+        self._people_icon_offset = None
+        self._meeting_duration_text_offset = None
+        self._participants_number_text_offset = None
 
     def clear_debug_images(self):
         rmtree(TEAMS_DEBUG_IMAGES_DIR_ABS_PATH, ignore_errors=True)
@@ -137,30 +177,29 @@ class TeamsController:
             os.makedirs(TEAMS_DEBUG_IMAGES_DIR_ABS_PATH, exist_ok=True)
             cv2.imwrite(p.join(TEAMS_DEBUG_IMAGES_DIR_ABS_PATH, file), debug_image)
 
-    def _ensure_meeting_window_ready(self):
-        if not self._window or not "Microsoft Teams" in self._window.getAppName():
-            raise WindowNotReadyException("Teams window is not open")
-        if self._window.topleft.x < 0 or self._window.topleft.y < 0:
-            raise WindowNotReadyException("Window is partially out of screen")
-        if (
-            self._window.bottomright.x > self._screen_size.width
-            or self._window.bottomright.y > self._screen_size.height
-        ):
-            raise WindowNotReadyException("Window is partially out of screen")
-        # self._window.maximize()
+    def ensure_meeting_window_is_ready(self):
+        for window in self._teams_windows:
+            if window.isMaximized:
+                return
+        raise WindowNotReadyException("Teams window is not on full screen")
 
-    def _extract_elements(self, refresh_offsets: bool = False):
-        if not len(self._screenshot_overrides):
-            self._ensure_meeting_window_ready()
+    def close_meeting_window(self):
+        for window in self._teams_windows:
+            window.close(True)
+
+    def _is_meeting_window(self, title: str) -> bool:
+        if not title.endswith(" | Microsoft Teams"):
+            return False
+        for name in self._teams_excluded_names:
+            if title.startswith(name + " | "):
+                return False
+        return True
+
+    def _extract_elements(self):
+        if not self._screenshot_overrides:
+            self.ensure_meeting_window_is_ready()
 
         self._take_screenshot()
-
-        if refresh_offsets:
-            self._leave_button_offset = None
-            self._shield_icon_offset = None
-            self._people_icon_offset = None
-            self._meeting_duration_text_offset = None
-            self._participants_number_text_offset = None
 
         matches = self._find_elements_areas(
             self._leave_button_templ,
@@ -373,8 +412,8 @@ if __name__ == "__main__":
     for file in os.listdir(TEST_IMAGES_DIR_ABS_PATH):
         if file.endswith(".png"):
             overrides.append(cv2.imread(p.join(TEST_IMAGES_DIR_ABS_PATH, file)))
-    ctrl = TeamsController(screenshot_overrides=overrides)
-    # ctrl = TeamsController()
+    # ctrl = TeamsController(screenshot_overrides=overrides)
+    ctrl = TeamsController()
     ctrl.clear_debug_images()
 
     i = 0
@@ -394,5 +433,5 @@ if __name__ == "__main__":
         except ParticipantsNumberNotVisibleException as e:
             print(e)
         finally:
-            ctrl.show_debug_image(headless=True)
+            # ctrl.show_debug_image(headless=True)
             i += 1
