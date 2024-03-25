@@ -49,9 +49,12 @@
         "password": "AHbgP4YZbTEYpiFf"
     },
     "settings": {
-        "min_time": "00:15:00",
+        "min_time": "00:30:00",
+        "max_time": "03:00:00",
         "min_participants": 5,
-        "min_participants_ratio": 0.1,
+        "min_participants_ratio": 0.15,
+        "moving_avg_len": 30,
+        "loading_sound_path": "godzilla_loading.mp3",
         "warning_sound_path": "circus_theme.mp3"
     }
 }
